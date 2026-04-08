@@ -15,7 +15,17 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     reset_token_expire_minutes: int = 30
 
-    # TODO: Mail server config
+    max_upload_size_profile_pic: int = 5 * 1024 * 1024
+
+    # Mail server config
+    mail_server: str = "localhost"
+    mail_port: int = 587
+    mail_username: str = ""
+    mail_password: SecretStr = SecretStr("")
+    mail_from: str = "noreply@example.com"
+    mail_use_tls: bool = True
+
+    frontend_url: str = "http://localhost:8000"
 
 
 settings = Settings()  # type: ignore[call-arg]  # Loaded from .env file

@@ -15,7 +15,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import models
 from config import settings
-from database import Base, engine, get_db
+from database import engine, get_db
+from routers import users
 
 
 @asynccontextmanager
@@ -27,7 +28,11 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+app.mount("/media", StaticFiles(directory="media"), name="media")
+
 templates = Jinja2Templates(directory="templates")
+
+app.include_router(users.router, prefix="api/users", tags=["users"])
 
 
 @app.exception_handler(StarletteHTTPException)
