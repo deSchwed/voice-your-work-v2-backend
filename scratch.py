@@ -1,5 +1,5 @@
-import torch
 import soundfile as sf
+import torch
 from qwen_tts import Qwen3TTSModel
 
 model = Qwen3TTSModel.from_pretrained(
