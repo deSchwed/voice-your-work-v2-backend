@@ -29,16 +29,13 @@ from auth import (
 )
 from config import settings
 from database import get_db
-from schemas import (
+from schemas.auth import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
     Token,
-    UserCreate,
-    UserPrivate,
-    UserPublic,
-    UserUpdate,
 )
+from schemas.users import UserCreate, UserPrivate, UserPublic, UserUpdate
 from utils.email_utils import send_password_reset_email
 from utils.image_utils import delete_profile_image, process_profile_image
 

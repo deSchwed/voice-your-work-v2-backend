@@ -23,6 +23,12 @@ class User(Base):
         back_populates="user", cascade="all, delete-orphan"
     )
 
+    @property
+    def image_path(self) -> str:
+        if self.image_file:
+            return f"/media/profile_pics/{self.image_file}"
+        return "/static/profile_pics/default.jpg"
+
 
 class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     reset_token_expire_minutes: int = 30
 
     max_upload_size_profile_pic: int = 5 * 1024 * 1024
+    max_upload_size_wav_file: int = 10 * 1024 * 1024
 
     # Mail server config
     mail_server: str = "localhost"

@@ -385,3 +385,9 @@ $RECYCLE.BIN/
 
 # Project specific ignores
 models/
+output_voice_*
+*.wav
+
+# Testing core voice logic
+scratch.py
+example_voice_design.py
