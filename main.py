@@ -16,7 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import models
 from config import settings
 from database import engine, get_db
-from routers import users
+from routers import users, voices
 
 
 @asynccontextmanager
@@ -34,6 +34,7 @@ app.mount("/media", StaticFiles(directory="media"), name="media")
 templates = Jinja2Templates(directory="templates")
 
 app.include_router(users.router, prefix="/api/users", tags=["users"])
+app.include_router(voices.router, prefix="/api/tts", tags=["tts, voice_cloning"])
 
 
 @app.exception_handler(StarletteHTTPException)

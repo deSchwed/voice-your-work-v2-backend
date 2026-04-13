@@ -389,5 +389,4 @@ output_voice_*
 *.wav
 
 # Testing core voice logic
-scratch.py
-example_voice_design.py
+testing_voice_logic/
