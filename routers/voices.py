@@ -1,16 +1,7 @@
-from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import (
-    APIRouter,
-    BackgroundTasks,
-    Depends,
-    HTTPException,
-    UploadFile,
-    status,
-)
-from sqlalchemy import delete as sql_delete
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from starlette.concurrency import run_in_threadpool
@@ -25,11 +16,9 @@ from schemas.voices import (
     VoiceCloneGenerateResponse,
     VoiceCloneResponse,
     VoiceCloneResponsePrivate,
-    VoiceCloneUpdate,
 )
 from utils.sound_utils import delete_audio_file, process_ref_audio
-from voice_engine.engine import tts_engine
-from voice_engine.preview import generate_preview
+from voice_engine.queue import voice_queue
 
 router = APIRouter()
 
@@ -45,9 +34,9 @@ async def get_voices_all(
     """Return a list of all public voices that are set to ready."""
     result = await db.execute(
         select(models.VoiceClone)
-        .where(models.VoiceClone.visibility == True)
-        .where(models.VoiceClone.is_ready == True)
-        .options(selectinload(models.VoiceClone.user))
+        .where(models.VoiceClone.visibility)
+        .where(models.VoiceClone.is_ready)
+        .options(selectinload(models.VoiceClone.owner))
         .order_by(models.VoiceClone.times_used.desc())
     )
     voices = result.scalars().all()
@@ -73,7 +62,7 @@ async def create_clone(
     )
     db.add(new_voice_clone)
     await db.commit()
-    await db.refresh(new_voice_clone, attribute_names=["user"])
+    await db.refresh(new_voice_clone, attribute_names=["owner"])
     return new_voice_clone
 
 
@@ -84,9 +73,11 @@ async def upload_ref_audio(
     current_user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Uploads reference audio file for selected voice clone to ready it for usage by generating preview audio."""
+    """Uploads reference audio file for selected voice clone and generates preview audio."""
     result = await db.execute(
-        select(models.VoiceClone).where(models.VoiceClone.id == voice_id)
+        select(models.VoiceClone)
+        .where(models.VoiceClone.id == voice_id)
+        .options(selectinload(models.VoiceClone.owner))
     )
     voice = result.scalars().first()
     if not voice:
@@ -129,7 +120,6 @@ async def upload_ref_audio(
     old_preview = voice.preview_audio_file
 
     voice.ref_audio_file = new_filename
-
     await db.commit()
     await db.refresh(voice)
 
@@ -138,16 +128,12 @@ async def upload_ref_audio(
     if old_preview:
         delete_audio_file(old_preview, is_preview=True)
 
-    # Generate preview audio
-    preview_filename = generate_preview(
-        voice.ref_text, voice.ref_audio_path, voice.name
+    await voice_queue.enqueue_preview(
+        voice_id=voice.id,
+        ref_text=voice.ref_text,
+        ref_audio=voice.ref_audio_path,
+        name=voice.name,
     )
-
-    voice.preview_audio_file = preview_filename
-    voice.is_ready = True
-
-    await db.commit()
-    await db.refresh(voice)
 
     return voice
 
@@ -158,7 +144,7 @@ async def delete_voice_clone(
     current_user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Deletes selected Voice Clone"""
+    """Deletes selected Voice Clone."""
     result = await db.execute(
         select(models.VoiceClone).where(models.VoiceClone.id == voice_id)
     )
@@ -194,16 +180,15 @@ async def delete_voice_clone(
 )
 async def generate_single(
     voice_id: int,
-    generate_prompt: VoiceCloneGenerate,
+    prompt: VoiceCloneGenerate,
     current_user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Generate TTS file with the provided text,"""
+    """Queue a TTS generation request for the given voice."""
     result = await db.execute(
         select(models.VoiceClone).where(models.VoiceClone.id == voice_id)
     )
     voice = result.scalars().first()
-
     if not voice:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -211,7 +196,8 @@ async def generate_single(
         )
     if not voice.is_ready:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Voice not ready yet"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Voice not ready yet",
         )
     if not voice.visibility and voice.user_id != current_user.id:
         raise HTTPException(
@@ -219,19 +205,58 @@ async def generate_single(
             detail="Not authorized to use this voice",
         )
 
-    tts_engine.load()
+    generation = models.VoiceGenerate(
+        user_id=current_user.id,
+        voice_id=voice_id,
+        prompt_text=prompt.prompt_text,
+        language=prompt.language,
+    )
+    db.add(generation)
+    await db.commit()
+    await db.refresh(generation)
 
-    # TODO: check language
-    try:
-        filepath = tts_engine.generate(
-            text=generate_prompt.prompt_text,
-            language=generate_prompt.language,
-            ref_audio=voice.ref_audio_path,
-            ref_text=voice.ref_text,
-        )
-    except Exception as err:
+    await voice_queue.enqueue_generate(
+        generation_id=generation.id,
+        text=prompt.prompt_text,
+        language=prompt.language,
+        ref_audio=voice.ref_audio_path,
+        ref_text=voice.ref_text,
+    )
+
+    result = await db.execute(
+        select(models.VoiceGenerate)
+        .where(models.VoiceGenerate.id == generation.id)
+        .options(selectinload(models.VoiceGenerate.queue_job))
+    )
+    return result.scalars().first()
+
+
+@router.get(
+    "/generate/{generation_id}",
+    response_model=VoiceCloneGenerateResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_generation(
+    generation_id: int,
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Poll the status of a queued generation request."""
+    result = await db.execute(
+        select(models.VoiceGenerate)
+        .where(models.VoiceGenerate.id == generation_id)
+        .options(selectinload(models.VoiceGenerate.queue_job))
+    )
+    generation = result.scalars().first()
+    if not generation:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(err)
-        ) from err
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Generation not found",
+        )
+    if generation.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view this generation",
+        )
 
-    return {"filepath": filepath}
+    return generation

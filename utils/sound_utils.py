@@ -2,7 +2,6 @@ import uuid
 from io import BytesIO
 from pathlib import Path
 
-import numpy as np
 import soundfile as sf
 
 REF_AUDIO_DIR = Path("media/ref_audio")

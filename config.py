@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     max_upload_size_profile_pic: int = 5 * 1024 * 1024
     max_upload_size_wav_file: int = 10 * 1024 * 1024
 
+    # TTS specific languages
+
     # Mail server config
     mail_server: str = "localhost"
     mail_port: int = 587

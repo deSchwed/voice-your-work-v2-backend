@@ -24,14 +24,14 @@ async def send_email(
     if html_content:
         message.add_alternative(html_content, subtype="html")
 
-        await aiosmtplib.send(
-            message,
-            hostname=settings.mail_server,
-            port=settings.mail_port,
-            username=settings.mail_username if settings.mail_username else None,
-            password=settings.mail_password.get_secret_value() or None,
-            start_tls=settings.mail_use_tls,
-        )
+    await aiosmtplib.send(
+        message,
+        hostname=settings.mail_server,
+        port=settings.mail_port,
+        username=settings.mail_username if settings.mail_username else None,
+        password=settings.mail_password.get_secret_value() or None,
+        start_tls=settings.mail_use_tls,
+    )
 
 
 async def send_password_reset_email(to_email: str, username: str, token: str) -> None:

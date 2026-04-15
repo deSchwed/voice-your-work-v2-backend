@@ -1,7 +1,7 @@
+import asyncio
 from contextlib import asynccontextmanager
-from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, Request, status
 from fastapi.exception_handlers import (
     http_exception_handler,
     request_validation_exception_handler,
@@ -9,20 +9,22 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
-from sqlalchemy.orm import selectinload
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-import models
-from config import settings
-from database import engine, get_db
+from database import engine
 from routers import users, voices
+from voice_engine.queue import voice_queue
+from voice_engine.engine import tts_engine
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    await asyncio.to_thread(tts_engine.load)
+    await voice_queue.start()
+    await voice_queue.restore_from_db()
     yield
     # Shutdown
+    await voice_queue.stop()
     await engine.dispose()
 
 

@@ -6,7 +6,6 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     HTTPException,
-    Query,
     UploadFile,
     status,
 )
@@ -15,7 +14,6 @@ from PIL import UnidentifiedImageError
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from starlette.concurrency import run_in_threadpool
 
 import models
@@ -104,7 +102,7 @@ async def login_for_access_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
-            headers={"WWW-Autheenticate": "Bearer"},
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
     # Create access token with user id as subject

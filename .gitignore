@@ -387,6 +387,8 @@ $RECYCLE.BIN/
 models/
 output_voice_*
 *.wav
-
+media/
+alembic/versions/
+tests/
 # Testing core voice logic
 testing_voice_logic/
