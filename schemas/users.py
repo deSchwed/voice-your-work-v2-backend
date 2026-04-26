@@ -1,5 +1,7 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+from models import Role
+
 
 class UserBase(BaseModel):
     username: str = Field(min_length=1, max_length=50)
@@ -21,6 +23,7 @@ class UserPublic(BaseModel):
 
 class UserPrivate(UserPublic):
     email: EmailStr
+    role: Role
 
 
 class UserUpdate(BaseModel):

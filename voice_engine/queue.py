@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
+import models
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -14,10 +16,11 @@ class JobStatus(str, Enum):
 class JobType(str, Enum):
     GENERATE = "generate"
     PREVIEW = "preview"
+    DESIGN = "design"
 
 
-JOB_TYPE_GENERATE = "generate"
-JOB_TYPE_PREVIEW = "preview"
+# JOB_TYPE_GENERATE = "generate"
+# JOB_TYPE_PREVIEW = "preview"
 
 
 @dataclass
@@ -28,6 +31,20 @@ class GenerateJob:
     language: str
     ref_audio: str
     ref_text: str
+    tier: models.Tier
+    status: JobStatus = JobStatus.PENDING
+    error: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class DesignJob:
+    queue_job_id: int
+    design_id: int
+    name: str
+    text: str
+    instruct: str
+    language: str
     status: JobStatus = JobStatus.PENDING
     error: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -47,8 +64,11 @@ class PreviewJob:
 
 class VoiceQueue:
     def __init__(self, max_workers: int = 1) -> None:
-        self._queue: asyncio.Queue[GenerateJob | PreviewJob] = asyncio.Queue()
+        self._queue: asyncio.Queue[GenerateJob | DesignJob | PreviewJob] = (
+            asyncio.Queue()
+        )
         self._generate_jobs: dict[int, GenerateJob] = {}  # keyed by generation_id
+        self._design_jobs: dict[int, DesignJob] = {}  # keyed by design_id
         self._preview_jobs: dict[int, PreviewJob] = {}  # keyed by voice_id
         self._max_workers = max_workers
         self._workers: list[asyncio.Task] = []
@@ -64,12 +84,28 @@ class VoiceQueue:
         language: str,
         ref_audio: str,
         ref_text: str,
+        tier: models.Tier,
     ) -> GenerateJob:
         queue_job_id = await self._create_db_job(
             JobType.GENERATE, voice_generation_id=generation_id
         )
         return await self._add_generate_to_queue(
-            queue_job_id, generation_id, text, language, ref_audio, ref_text
+            queue_job_id, generation_id, text, language, ref_audio, ref_text, tier
+        )
+
+    async def enqueue_design(
+        self,
+        design_id: int,
+        name: str,
+        text: str,
+        instruct: str,
+        language: str,
+    ) -> DesignJob:
+        queue_job_id = await self._create_db_job(
+            JobType.DESIGN, voice_design_id=design_id
+        )
+        return await self._add_design_to_queue(
+            queue_job_id, design_id, name, text, instruct, language
         )
 
     async def enqueue_preview(
@@ -89,6 +125,9 @@ class VoiceQueue:
     def get_generate_job(self, generation_id: int) -> GenerateJob | None:
         return self._generate_jobs.get(generation_id)
 
+    def get_design_job(self, design_id: int) -> DesignJob | None:
+        return self._design_jobs.get(design_id)
+
     def get_preview_job(self, voice_id: int) -> PreviewJob | None:
         return self._preview_jobs.get(voice_id)
 
@@ -105,7 +144,6 @@ class VoiceQueue:
         from sqlalchemy import select, update
         from sqlalchemy.orm import selectinload
 
-        import models
         from database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as session:
@@ -139,6 +177,18 @@ class VoiceQueue:
                             language=gen.language,
                             ref_audio=gen.voice.ref_audio_path,
                             ref_text=gen.voice.ref_text,
+                            tier=gen.tier,
+                        )
+                elif queue_job.job_type == JobType.DESIGN:
+                    design = queue_job.voice_design
+                    if design:
+                        await self._add_design_to_queue(
+                            queue_job_id=queue_job.id,
+                            design_id=design.id,
+                            name=design.name,
+                            text=design.prompt_text,
+                            instruct=design.instruct,
+                            language=design.language,
                         )
                 elif queue_job.job_type == JobType.PREVIEW:
                     voice = queue_job.voice_clone
@@ -159,15 +209,16 @@ class VoiceQueue:
         self,
         job_type: str,
         voice_generation_id: int | None = None,
+        voice_design_id: int | None = None,
         voice_clone_id: int | None = None,
     ) -> int:
-        import models
         from database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as session:
             queue_job = models.QueueJob(
                 job_type=job_type,
                 voice_generation_id=voice_generation_id,
+                voice_design_id=voice_design_id,
                 voice_clone_id=voice_clone_id,
             )
             session.add(queue_job)
@@ -183,6 +234,7 @@ class VoiceQueue:
         language: str,
         ref_audio: str,
         ref_text: str,
+        tier: models.Tier,
     ) -> GenerateJob:
         job = GenerateJob(
             queue_job_id=queue_job_id,
@@ -191,8 +243,30 @@ class VoiceQueue:
             language=language,
             ref_audio=ref_audio,
             ref_text=ref_text,
+            tier=tier,
         )
         self._generate_jobs[generation_id] = job
+        await self._queue.put(job)
+        return job
+
+    async def _add_design_to_queue(
+        self,
+        queue_job_id: int,
+        design_id: int,
+        name: str,
+        text: str,
+        instruct: str,
+        language: str,
+    ) -> DesignJob:
+        job = DesignJob(
+            queue_job_id=queue_job_id,
+            design_id=design_id,
+            name=name,
+            text=text,
+            instruct=instruct,
+            language=language,
+        )
+        self._design_jobs[design_id] = job
         await self._queue.put(job)
         return job
 
@@ -207,9 +281,9 @@ class VoiceQueue:
         job = PreviewJob(
             queue_job_id=queue_job_id,
             voice_id=voice_id,
+            name=name,
             ref_text=ref_text,
             ref_audio=ref_audio,
-            name=name,
         )
         self._preview_jobs[voice_id] = job
         await self._queue.put(job)
@@ -225,7 +299,6 @@ class VoiceQueue:
     ) -> None:
         from sqlalchemy import select
 
-        import models
         from database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as session:
@@ -260,6 +333,39 @@ class VoiceQueue:
 
             await session.commit()
 
+    async def _update_design_status(
+        self,
+        queue_job_id: int,
+        design_id: int,
+        status: JobStatus,
+        audio_file: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        from sqlalchemy import select
+
+        from database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as session:
+            queue_job_result = await session.execute(
+                select(models.QueueJob).where(models.QueueJob.id == queue_job_id)
+            )
+            queue_job = queue_job_result.scalars().first()
+            if queue_job:
+                queue_job.status = status
+                if error_message is not None:
+                    queue_job.error_message = error_message
+
+            if audio_file is not None:
+                design_result = await session.execute(
+                    select(models.VoiceDesign).where(models.VoiceDesign.id == design_id)
+                )
+                design = design_result.scalars().first()
+                if design:
+                    design.audio_file = audio_file
+                    design.is_generated = True
+
+            await session.commit()
+
     async def _update_preview_status(
         self,
         queue_job_id: int,
@@ -270,7 +376,6 @@ class VoiceQueue:
     ) -> None:
         from sqlalchemy import select
 
-        import models
         from database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as session:
@@ -313,6 +418,7 @@ class VoiceQueue:
                 language=job.language,
                 ref_audio=job.ref_audio,
                 ref_text=job.ref_text,
+                tier=job.tier,
             )
             job.status = JobStatus.COMPLETED
             await self._update_generate_status(
@@ -327,6 +433,38 @@ class VoiceQueue:
             await self._update_generate_status(
                 job.queue_job_id,
                 job.generation_id,
+                JobStatus.FAILED,
+                error_message=str(err),
+            )
+
+    async def _process_design(self, job: DesignJob) -> None:
+        from voice_engine.engine import tts_engine
+
+        job.status = JobStatus.PROCESSING
+        await self._update_design_status(
+            job.queue_job_id, job.design_id, JobStatus.PROCESSING
+        )
+
+        try:
+            filename = await asyncio.to_thread(
+                tts_engine.design,
+                text=job.text,
+                instruct=job.instruct,
+                language=job.language,
+            )
+            job.status = JobStatus.COMPLETED
+            await self._update_design_status(
+                job.queue_job_id,
+                job.design_id,
+                JobStatus.COMPLETED,
+                audio_file=filename,
+            )
+        except Exception as err:
+            job.status = JobStatus.FAILED
+            job.error = str(err)
+            await self._update_design_status(
+                job.queue_job_id,
+                job.design_id,
                 JobStatus.FAILED,
                 error_message=str(err),
             )
@@ -366,8 +504,10 @@ class VoiceQueue:
             try:
                 if isinstance(job, PreviewJob):
                     await self._process_preview(job)
-                else:
+                elif isinstance(job, GenerateJob):
                     await self._process_generate(job)
+                else:
+                    await self._process_design(job)
             finally:
                 self._queue.task_done()
 

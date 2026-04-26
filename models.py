@@ -1,11 +1,28 @@
 from __future__ import annotations
 
+import enum
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+
+
+class Role(enum.Enum):
+    admin = "admin"
+    premium = "premium"
+    basic = "basic"
+
+
+class Origin(enum.Enum):
+    clone = "clone"
+    design = "design"
+
+
+class Tier(enum.Enum):
+    basic = "basic"
+    premium = "premium"
 
 
 class User(Base):
@@ -18,6 +35,9 @@ class User(Base):
     image_file: Mapped[str | None] = mapped_column(
         String(200), nullable=True, default=None
     )
+    role: Mapped[Role] = mapped_column(
+        Enum(Role, name="role_enum"), nullable=False, default=Role.basic
+    )
 
     reset_tokens: Mapped[list[PasswordResetToken]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
@@ -26,6 +46,9 @@ class User(Base):
         back_populates="owner", cascade="all, delete-orphan"
     )
     voice_generations: Mapped[list[VoiceGenerate]] = relationship(
+        back_populates="owner", cascade="all, delete-orphan"
+    )
+    voice_designs: Mapped[list[VoiceDesign]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
     )
 
@@ -61,6 +84,9 @@ class VoiceClone(Base):
     description: Mapped[str] = mapped_column(
         Text, nullable=False, default="A custom Voice."
     )
+    origin: Mapped[Origin] = mapped_column(
+        Enum(Origin, name="origin_enum"), nullable=False, default=Origin.clone
+    )
     visibility: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     times_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
@@ -94,6 +120,37 @@ class VoiceClone(Base):
         return ""
 
 
+class VoiceDesign(Base):
+    __tablename__ = "voice_designs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(50), nullable=False)
+    prompt_text: Mapped[str] = mapped_column(Text, nullable=False)
+    instruct: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str] = mapped_column(String(10), nullable=False, default="English")
+    is_generated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    audio_file: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, default=None
+    )
+    owner: Mapped[User] = relationship(back_populates="voice_designs")
+    queue_job: Mapped[QueueJob | None] = relationship(
+        "QueueJob",
+        foreign_keys="[QueueJob.voice_design_id]",
+        back_populates="voice_design",
+        uselist=False,
+    )
+
+    @property
+    def audio_path(self) -> str:
+        if self.audio_file:
+            return f"media/design/{self.audio_file}"
+        return ""
+
+
 class VoiceGenerate(Base):
     __tablename__ = "voice_generations"
 
@@ -102,6 +159,9 @@ class VoiceGenerate(Base):
     voice_id: Mapped[int] = mapped_column(ForeignKey("voice_clones.id"), nullable=False)
     prompt_text: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(String(10), nullable=False, default="English")
+    tier: Mapped[Tier] = mapped_column(
+        Enum(Tier, name="tier_enum"), nullable=False, default=Tier.basic
+    )
     is_generated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
@@ -145,6 +205,9 @@ class QueueJob(Base):
     voice_clone_id: Mapped[int | None] = mapped_column(
         ForeignKey("voice_clones.id"), nullable=True, default=None
     )
+    voice_design_id: Mapped[int | None] = mapped_column(
+        ForeignKey("voice_designs.id"), nullable=True, default=None
+    )
 
     voice_generation: Mapped[VoiceGenerate | None] = relationship(
         "VoiceGenerate",
@@ -154,4 +217,9 @@ class QueueJob(Base):
     voice_clone: Mapped[VoiceClone | None] = relationship(
         "VoiceClone",
         foreign_keys=[voice_clone_id],
+    )
+    voice_design: Mapped[VoiceDesign | None] = relationship(
+        "VoiceDesign",
+        foreign_keys=[voice_design_id],
+        back_populates="queue_job",
     )

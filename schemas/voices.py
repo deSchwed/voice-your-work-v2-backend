@@ -56,6 +56,13 @@ class VoiceCloneGenerate(BaseModel):
     language: SUPPORTED_LANGUAGES
 
 
+class VoiceDesign(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    prompt_text: str = Field(min_length=1, max_length=500)
+    instruct: str = Field(min_length=1, max_length=500)
+    language: SUPPORTED_LANGUAGES
+
+
 class QueueJobResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -71,6 +78,19 @@ class VoiceCloneGenerateResponse(BaseModel):
     id: int
     voice_id: int
     prompt_text: str
+    language: str
+    is_generated: bool
+    audio_path: str
+    created_at: datetime
+    queue_job: QueueJobResponse | None
+
+
+class VoiceDesignResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    prompt_text: str
+    instruct: str
     language: str
     is_generated: bool
     audio_path: str

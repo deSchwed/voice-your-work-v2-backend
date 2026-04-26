@@ -10,12 +10,15 @@ import models
 from auth import CurrentUser
 from config import settings
 from database import get_db
+from models import Role, Tier
 from schemas.voices import (
     VoiceCloneCreate,
     VoiceCloneGenerate,
     VoiceCloneGenerateResponse,
     VoiceCloneResponse,
     VoiceCloneResponsePrivate,
+    VoiceDesign,
+    VoiceDesignResponse,
 )
 from utils.sound_utils import delete_audio_file, process_ref_audio
 from voice_engine.queue import voice_queue
@@ -204,7 +207,6 @@ async def generate_single(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to use this voice",
         )
-
     generation = models.VoiceGenerate(
         user_id=current_user.id,
         voice_id=voice_id,
@@ -215,12 +217,14 @@ async def generate_single(
     await db.commit()
     await db.refresh(generation)
 
+    tier = Tier.basic if current_user.role == Role.basic else Tier.premium
     await voice_queue.enqueue_generate(
         generation_id=generation.id,
         text=prompt.prompt_text,
         language=prompt.language,
         ref_audio=voice.ref_audio_path,
         ref_text=voice.ref_text,
+        tier=tier,
     )
 
     result = await db.execute(
@@ -260,3 +264,47 @@ async def get_generation(
         )
 
     return generation
+
+
+@router.post(
+    "/design",
+    response_model=VoiceDesignResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def design(
+    design_prompt: VoiceDesign,
+    current_user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Design a custom voice"""
+    if current_user.role == Role.basic:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot use voice design feature as a basic user",
+        )
+    new_voice_design = models.VoiceDesign(
+        user_id=current_user.id,
+        name=design_prompt.name,
+        prompt_text=design_prompt.prompt_text,
+        instruct=design_prompt.instruct,
+        language=design_prompt.language,
+    )
+
+    db.add(new_voice_design)
+    await db.commit()
+    await db.refresh(new_voice_design)
+
+    await voice_queue.enqueue_design(
+        design_id=new_voice_design.id,
+        name=design_prompt.name,
+        text=design_prompt.prompt_text,
+        instruct=design_prompt.instruct,
+        language=design_prompt.language,
+    )
+
+    result = await db.execute(
+        select(models.VoiceDesign)
+        .where(models.VoiceDesign.id == new_voice_design.id)
+        .options(selectinload(models.VoiceDesign.queue_job))
+    )
+    return result.scalars().first()

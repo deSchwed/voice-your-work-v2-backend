@@ -392,3 +392,4 @@ alembic/versions/
 tests/
 # Testing core voice logic
 testing_voice_logic/
+.claude
